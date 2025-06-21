@@ -22,12 +22,19 @@ export interface Document {
 export interface ParsedData {
   id: string
   document_id: string
-  row_index: number
-  data: Record<string, any>
-  tags: string[]
-  category: string
+  field_name: string
+  field_value: string
+  field_type: string
+  confidence: number
+  page_number?: number
+  coordinates?: any
   created_at: string
-  updated_at: string
+  updated_at?: string
+  // Legacy fields for backward compatibility
+  row_index?: number
+  data?: Record<string, any>
+  tags?: string[]
+  category?: string
 }
 
 export interface OCRResult {

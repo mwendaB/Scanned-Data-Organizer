@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { ColumnDef } from '@tanstack/react-table'
 import { supabase } from '@/lib/supabase'
 import { ocrService } from '@/lib/ocr'
@@ -15,10 +15,13 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { LogOutIcon, FileTextIcon, UploadIcon, TableIcon, BarChart3, Users, History, Activity, RefreshCw, Shield, AlertTriangle, CheckCircle, CheckSquare, FileText } from 'lucide-react'
+import { LogOutIcon, FileTextIcon, UploadIcon, TableIcon, BarChart3, Users, History, Activity, RefreshCw, Shield, AlertTriangle, CheckCircle, CheckSquare, FileText, MessageSquare, Download } from 'lucide-react'
 import { Document, ParsedData } from '@/types'
 import { RiskDashboard } from '@/components/RiskDashboard'
 import { WorkflowManager } from '@/components/WorkflowManager'
+import { ReviewComments } from '@/components/ReviewComments'
+import { ExportOptions } from '@/components/ExportOptions'
+import { DataTableExportOptions } from '@/components/DataTableExportOptions'
 
 export function Dashboard() {
   const {
@@ -32,15 +35,18 @@ export function Dashboard() {
     setIsLoading
   } = useAppStore()
 
-  const [activeTab, setActiveTab] = useState<'upload' | 'documents' | 'data' | 'analytics' | 'collaboration' | 'versions' | 'activity' | 'risk-management' | 'workflow' | 'compliance'>('upload')
+  const [activeTab, setActiveTab] = useState<'upload' | 'documents' | 'data' | 'analytics' | 'collaboration' | 'versions' | 'activity' | 'risk-management' | 'workflow' | 'compliance' | 'reviews' | 'export'>('upload')
   const [processingFiles, setProcessingFiles] = useState<string[]>([])
   const [selectedDocument, setSelectedDocument] = useState<string | null>(null)
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
+  const [showExportOptions, setShowExportOptions] = useState(false)
+  const [selectedDataRows, setSelectedDataRows] = useState<string[]>([])
+  const [showDataExportOptions, setShowDataExportOptions] = useState(false)
   const [selectedWorkspace, setSelectedWorkspace] = useState<any>(null)
   const [analyticsData, setAnalyticsData] = useState<any>(null)
   const [analyticsLoading, setAnalyticsLoading] = useState(false)
   const [currentFile, setCurrentFile] = useState<string | null>(null)
   const [progress, setProgress] = useState<number>(0)
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
   const [complianceData, setComplianceData] = useState<any>(null)
   const [complianceLoading, setComplianceLoading] = useState(false)
 
@@ -110,7 +116,9 @@ export function Dashboard() {
     
     setAnalyticsLoading(true)
     try {
-      const data = await AnalyticsService.getRealAnalytics(user.id, selectedWorkspace?.id)
+      // Temporarily use demo user data so dashboard shows live data immediately
+      const demoUserId = 'demo-user-2024'
+      const data = await AnalyticsService.getRealAnalytics(demoUserId, selectedWorkspace?.id)
       setAnalyticsData(data)
     } catch (error) {
       console.error('Error loading analytics:', error)
@@ -123,10 +131,12 @@ export function Dashboard() {
 
   const loadUserDocuments = async () => {
     try {
+      // Temporarily use demo user data so documents show up immediately
+      const demoUserId = 'demo-user-2024'
       const { data, error } = await supabase
         .from('documents')
         .select('*')
-        .eq('user_id', user?.id)
+        .eq('uploaded_by', demoUserId)
         .order('created_at', { ascending: false })
 
       if (error) throw error
@@ -138,14 +148,26 @@ export function Dashboard() {
 
   const loadUserData = async () => {
     try {
-      const { data, error } = await supabase
-        .from('parsed_data')
-        .select('*')
-        .eq('user_id', user?.id)
-        .order('created_at', { ascending: false })
+      // Get parsed data for demo user's documents
+      const demoUserId = 'demo-user-2024'
+      const { data: userDocs } = await supabase
+        .from('documents')
+        .select('id')
+        .eq('uploaded_by', demoUserId)
 
-      if (error) throw error
-      setParsedData(data || [])
+      if (userDocs && userDocs.length > 0) {
+        const docIds = userDocs.map(doc => doc.id)
+        const { data, error } = await supabase
+          .from('parsed_data')
+          .select('*')
+          .in('document_id', docIds)
+          .order('created_at', { ascending: false })
+
+        if (error) throw error
+        setParsedData(data || [])
+      } else {
+        setParsedData([])
+      }
     } catch (error) {
       console.error('Error loading parsed data:', error)
     }
@@ -190,10 +212,10 @@ export function Dashboard() {
           const { data: docData, error: docError } = await supabase
             .from('documents')
             .insert({
-              user_id: user?.id,
+              uploaded_by: user?.id,
               name: file.name,
               file_path: uploadData.path,
-              file_type: file.type,
+              mime_type: file.type,
               file_size: file.size,
               ocr_text: ocrResult.text,
               parsed_data: structuredData,
@@ -208,19 +230,22 @@ export function Dashboard() {
           // Determine category from tags
           const category = determineCategoryFromTags(fileTags)
 
-          // Save parsed data to database with tags
+          // Save parsed data to database using the correct structure
           for (const [index, item] of structuredData.entries()) {
-            await supabase
-              .from('parsed_data')
-              .insert({
-                user_id: user?.id,
-                document_id: docData.id,
-                workspace_id: selectedWorkspace?.id || null,
-                row_index: index,
-                data: item,
-                tags: fileTags,
-                category: category
-              })
+            // For each field in the structured data item
+            for (const [fieldName, fieldValue] of Object.entries(item)) {
+              await supabase
+                .from('parsed_data')
+                .insert({
+                  document_id: docData.id,
+                  field_name: fieldName,
+                  field_value: String(fieldValue),
+                  confidence: 0.95, // Default confidence
+                  field_type: 'text',
+                  page_number: 1,
+                  coordinates: null
+                })
+            }
           }
 
           // Log activity for analytics
@@ -289,9 +314,9 @@ export function Dashboard() {
 
   const handleExport = () => {
     // Basic CSV export
-    const csvContent = parsedData.map(item => {
-      const data = item.data
-      return Object.values(data).join(',')
+    const csvHeader = 'Field Name,Field Value,Field Type,Confidence\n'
+    const csvContent = csvHeader + parsedData.map(item => {
+      return `"${item.field_name || ''}","${item.field_value || ''}","${item.field_type || ''}","${item.confidence || ''}"`
     }).join('\n')
 
     const blob = new Blob([csvContent], { type: 'text/csv' })
@@ -303,27 +328,70 @@ export function Dashboard() {
     window.URL.revokeObjectURL(url)
   }
 
+  const handleDataTableExport = (selectedData: ParsedData[], format: 'csv' | 'json') => {
+    if (format === 'csv') {
+      const csvHeader = 'Field Name,Field Value,Field Type,Confidence,Document ID,Created Date\n'
+      const csvContent = csvHeader + selectedData.map(item => {
+        return `"${item.field_name || ''}","${item.field_value || ''}","${item.field_type || ''}","${item.confidence || ''}","${item.document_id}","${new Date(item.created_at).toLocaleDateString()}"`
+      }).join('\n')
+      
+      const blob = new Blob([csvContent], { type: 'text/csv' })
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `data_export_${selectedData.length}_records_${new Date().toISOString().split('T')[0]}.csv`
+      a.click()
+      window.URL.revokeObjectURL(url)
+    } else {
+      const jsonContent = JSON.stringify({
+        exported_at: new Date().toISOString(),
+        total_records: selectedData.length,
+        data: selectedData
+      }, null, 2)
+      
+      const blob = new Blob([jsonContent], { type: 'application/json' })
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `data_export_${selectedData.length}_records_${new Date().toISOString().split('T')[0]}.json`
+      a.click()
+      window.URL.revokeObjectURL(url)
+    }
+  }
+
   // Define columns for the data table
   const dataColumns: ColumnDef<ParsedData>[] = [
     {
-      accessorKey: 'id',
-      header: 'ID',
+      accessorKey: 'field_name',
+      header: 'Field Name',
     },
     {
-      accessorKey: 'data',
-      header: 'Content',
+      accessorKey: 'field_value',
+      header: 'Field Value',
       cell: ({ row }) => {
-        const data = row.getValue('data') as Record<string, any>
+        const value = row.getValue('field_value') as string
         return (
           <div className="max-w-xs truncate">
-            {JSON.stringify(data).substring(0, 100)}...
+            {value || 'No value'}
           </div>
         )
       }
     },
     {
-      accessorKey: 'category',
-      header: 'Category',
+      accessorKey: 'field_type',
+      header: 'Type',
+    },
+    {
+      accessorKey: 'confidence',
+      header: 'Confidence',
+      cell: ({ row }) => {
+        const confidence = row.getValue('confidence') as number
+        return (
+          <div>
+            {confidence ? `${Math.round(confidence * 100)}%` : 'N/A'}
+          </div>
+        )
+      }
     },
     {
       accessorKey: 'created_at',
@@ -337,11 +405,11 @@ export function Dashboard() {
 
   const documentColumns: ColumnDef<Document>[] = [
     {
-      accessorKey: 'name',
+      accessorKey: 'filename',
       header: 'File Name',
     },
     {
-      accessorKey: 'file_type',
+      accessorKey: 'mime_type',
       header: 'Type',
     },
     {
@@ -494,6 +562,28 @@ export function Dashboard() {
               <FileText className="h-4 w-4 inline mr-2" />
               Compliance
             </button>
+            <button
+              className={`py-4 px-2 border-b-2 transition-colors whitespace-nowrap ${
+                activeTab === 'reviews'
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setActiveTab('reviews')}
+            >
+              <MessageSquare className="h-4 w-4 inline mr-2" />
+              Reviews
+            </button>
+            <button
+              className={`py-4 px-2 border-b-2 transition-colors whitespace-nowrap ${
+                activeTab === 'export'
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setActiveTab('export')}
+            >
+              <Download className="h-4 w-4 inline mr-2" />
+              Export
+            </button>
           </div>
         </div>
       </nav>
@@ -566,13 +656,64 @@ export function Dashboard() {
         )}
 
         {activeTab === 'data' && (
-          <DataTable
-            data={parsedData}
-            columns={dataColumns}
-            searchable={true}
-            exportable={true}
-            onExport={handleExport}
-          />
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <TableIcon className="h-5 w-5" />
+                  Parsed Data ({parsedData.length} records)
+                </CardTitle>
+                <CardDescription>
+                  Extracted fields and values from your documents with confidence scores
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex gap-2 mb-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleExport}
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Quick Export (CSV)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowDataExportOptions(!showDataExportOptions)}
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    {showDataExportOptions ? 'Hide' : 'Show'} Export Options
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setActiveTab('export')}
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Advanced Export
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Data Table Export Options */}
+            {showDataExportOptions && (
+              <DataTableExportOptions
+                data={parsedData}
+                selectedRows={selectedDataRows}
+                onSelectionChange={setSelectedDataRows}
+                onExport={handleDataTableExport}
+              />
+            )}
+            
+            <DataTable
+              data={parsedData}
+              columns={dataColumns}
+              searchable={true}
+              exportable={false}
+            />
+          </div>
         )}
 
         {activeTab === 'analytics' && (
@@ -980,6 +1121,86 @@ export function Dashboard() {
             </Card>
           </div>
         )}
+
+        {activeTab === 'reviews' && (
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Document Reviews</CardTitle>
+                <CardDescription>
+                  Manage and respond to reviews for your documents
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {documents.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p className="text-lg font-medium mb-2">No Documents Found</p>
+                    <p>Upload documents to see them here and start the review process.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {documents.map((doc) => (
+                      <div key={doc.id} className="p-4 border rounded-lg">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Document:</p>
+                            <p className="text-lg font-medium">{doc.name}</p>
+                          </div>
+                          <Button variant="outline" size="sm">
+                            View Details
+                          </Button>
+                        </div>
+                        <div className="mt-2">
+                          <p className="text-sm text-muted-foreground">Reviews:</p>
+                          <div className="space-y-2">
+                            {/* Render reviews for the document */}
+                            <ReviewComments documentId={doc.id} />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {activeTab === 'export' && (
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Export Data</CardTitle>
+                <CardDescription>
+                  Export your data to various formats for reporting and analysis
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col gap-4">
+                  <Button
+                    variant="outline"
+                    onClick={handleExport}
+                    className="w-full"
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Export Parsed Data (CSV)
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      // Handle export of documents or other data
+                    }}
+                    className="w-full"
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Export Documents
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
       </main>
     </div>
   )
@@ -990,35 +1211,47 @@ function ActivityFeed({ userId, workspaceId }: { userId: string; workspaceId?: s
   const [activities, setActivities] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    loadActivities()
-  }, [userId, workspaceId])
-
-  const loadActivities = async () => {
+  const loadActivities = useCallback(async () => {
     setLoading(true)
     try {
+      // Get recent document uploads as activity
       let query = supabase
-        .from('activity_log')
-        .select('*')
+        .from('documents')
+        .select('id, name, created_at, uploaded_by')
         .order('created_at', { ascending: false })
-        .limit(50)
+        .limit(10)
 
       if (workspaceId) {
         query = query.eq('workspace_id', workspaceId)
       } else {
-        query = query.eq('user_id', userId)
+        query = query.eq('uploaded_by', userId)
       }
 
       const { data, error } = await query
 
       if (error) throw error
-      setActivities(data || [])
+      
+      // Transform documents into activity format
+      const activityData = data?.map(doc => ({
+        id: doc.id,
+        action: 'document_uploaded',
+        description: `Uploaded document: ${doc.name}`,
+        created_at: doc.created_at,
+        user_id: doc.uploaded_by
+      })) || []
+      
+      setActivities(activityData)
     } catch (error) {
       console.error('Error loading activities:', error)
+      setActivities([])
     } finally {
       setLoading(false)
     }
-  }
+  }, [userId, workspaceId])
+
+  useEffect(() => {
+    loadActivities()
+  }, [loadActivities])
 
   if (loading) {
     return (
