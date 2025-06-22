@@ -9,7 +9,9 @@ export class ExportService {
     // Get all unique keys from the data
     const allKeys = new Set<string>()
     data.forEach(item => {
-      Object.keys(item.data).forEach(key => allKeys.add(key))
+      if (item.data && typeof item.data === 'object') {
+        Object.keys(item.data).forEach(key => allKeys.add(key))
+      }
     })
 
     const headers = ['ID', 'Category', 'Created At', ...Array.from(allKeys)]
@@ -21,7 +23,7 @@ export class ExportService {
         item.category,
         new Date(item.created_at).toLocaleDateString(),
         ...Array.from(allKeys).map(key => {
-          const value = item.data[key] || ''
+          const value = (item.data && item.data[key]) || ''
           // Escape commas and quotes in CSV
           return typeof value === 'string' && (value.includes(',') || value.includes('"'))
             ? `"${value.replace(/"/g, '""')}"`

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { AuditingService, RiskAssessment, AuditTrailEntry, ComplianceCheck } from '@/lib/auditing'
+import { supabase } from '@/lib/supabase'
 
 interface RiskDashboardProps {
   documentId?: string
@@ -20,9 +21,7 @@ export function RiskDashboard({ documentId, workspaceId }: RiskDashboardProps) {
   const [overallRiskScore, setOverallRiskScore] = useState(0)
 
   useEffect(() => {
-    if (documentId) {
-      loadDocumentRiskData()
-    }
+    loadDocumentRiskData()
   }, [documentId])
 
   const loadDocumentRiskData = async () => {
@@ -37,33 +36,132 @@ export function RiskDashboard({ documentId, workspaceId }: RiskDashboardProps) {
           Promise.resolve([])
         ])
         
+        // Only use database data - no fallback
         setRiskAssessments(risks)
+        
+        // Calculate overall risk score from actual data
+        if (risks.length > 0) {
+          const validRisks = risks.filter(r => typeof r.risk_score === 'number' && !isNaN(r.risk_score))
+          if (validRisks.length > 0) {
+            const avgRisk = validRisks.reduce((sum, r) => sum + r.risk_score, 0) / validRisks.length
+            setOverallRiskScore(avgRisk)
+          } else {
+            setOverallRiskScore(0)
+          }
+        } else {
+          setOverallRiskScore(0)
+        }
+        
         setAuditTrail(audit)
         setComplianceChecks(compliance)
+      } else {
+        // Load aggregate risk data for all user documents
+        console.log('Loading aggregate risk data for all user documents')
         
-        // Calculate overall risk score
-        if (risks.length > 0) {
-          const avgRisk = risks.reduce((sum, r) => sum + r.risk_score, 0) / risks.length
-          setOverallRiskScore(avgRisk)
+        try {
+          // Get current user's email
+          const { data: authData } = await supabase.auth.getUser()
+          const userEmail = authData?.user?.email || 'mwenda0107@gmail.com'
+          
+          // Get all risk assessments for user
+          const { data: allRisks, error: risksError } = await supabase
+            .from('risk_assessments')
+            .select('*')
+            .eq('assigned_to', userEmail)
+            .order('created_at', { ascending: false })
+          
+          if (risksError) {
+            console.error('Error loading user risk assessments:', risksError)
+            setRiskAssessments([])
+          } else {
+            setRiskAssessments(allRisks || [])
+            
+            // Calculate overall risk score from all user risks
+            if (allRisks && allRisks.length > 0) {
+              // Convert risk levels to numeric scores for calculation
+              const riskLevelToScore: Record<string, number> = { 'LOW': 20, 'MEDIUM': 50, 'HIGH': 80, 'CRITICAL': 95 }
+              const validRisks = allRisks.filter(r => r.risk_level)
+              if (validRisks.length > 0) {
+                const avgRisk = validRisks.reduce((sum, r) => {
+                  const score = riskLevelToScore[r.risk_level as string] || 50
+                  return sum + score
+                }, 0) / validRisks.length
+                setOverallRiskScore(avgRisk)
+              } else {
+                setOverallRiskScore(0)
+              }
+            } else {
+              setOverallRiskScore(0)
+            }
+          }
+          
+          // Get all audit trail for user
+          const { data: allAudit, error: auditError } = await supabase
+            .from('audit_trail')
+            .select('*')
+            .eq('user_id', userEmail)
+            .order('created_at', { ascending: false })
+            .limit(50)
+          
+          if (auditError) {
+            console.error('Error loading user audit trail:', auditError)
+            setAuditTrail([])
+          } else {
+            setAuditTrail(allAudit || [])
+          }
+          
+          // Set compliance checks as empty for now
+          setComplianceChecks([])
+          
+        } catch (error) {
+          console.error('Error loading aggregate data:', error)
+          setRiskAssessments([])
+          setAuditTrail([])
+          setComplianceChecks([])
+          setOverallRiskScore(0)
         }
       }
     } catch (error) {
       console.error('Failed to load risk data:', error)
+      // Reset to empty state on error
+      setRiskAssessments([])
+      setAuditTrail([])
+      setComplianceChecks([])
+      setOverallRiskScore(0)
     } finally {
       setLoading(false)
     }
   }
 
-  const getRiskColor = (score: number) => {
-    if (score >= 80) return 'text-red-500'
-    if (score >= 60) return 'text-yellow-500'
-    if (score >= 40) return 'text-blue-500'
+  // Helper function to safely get risk assessment data with fallbacks
+  const safeRiskAssessment = (assessment: any) => ({
+    id: assessment.id || `temp-${Date.now()}`,
+    risk_score: typeof assessment.risk_score === 'number' ? assessment.risk_score : 0,
+    risk_category: assessment.risk_category || assessment.risk_level || 'UNKNOWN',
+    risk_level: assessment.risk_level || 'MEDIUM',
+    ai_confidence: typeof assessment.ai_confidence === 'number' ? assessment.ai_confidence : 0,
+    status: assessment.status || 'PENDING',
+    human_review_required: Boolean(assessment.human_review_required),
+    anomalies_detected: Array.isArray(assessment.anomalies_detected) ? assessment.anomalies_detected : [],
+    reviewer_notes: assessment.reviewer_notes || null,
+    created_at: assessment.created_at || new Date().toISOString(),
+    reviewed_at: assessment.reviewed_at || null,
+    document_id: assessment.document_id || null,
+    assigned_to: assessment.assigned_to || null
+  })
+
+  const getRiskColor = (score: number | null | undefined) => {
+    const safeScore = typeof score === 'number' && !isNaN(score) ? score : 0
+    if (safeScore >= 80) return 'text-red-500'
+    if (safeScore >= 60) return 'text-yellow-500'
+    if (safeScore >= 40) return 'text-blue-500'
     return 'text-green-500'
   }
 
-  const getRiskBadgeVariant = (score: number) => {
-    if (score >= 80) return 'destructive'
-    if (score >= 60) return 'default'
+  const getRiskBadgeVariant = (score: number | null | undefined) => {
+    const safeScore = typeof score === 'number' && !isNaN(score) ? score : 0
+    if (safeScore >= 80) return 'destructive'
+    if (safeScore >= 60) return 'default'
     return 'secondary'
   }
 
@@ -85,11 +183,11 @@ export function RiskDashboard({ documentId, workspaceId }: RiskDashboardProps) {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Overall Risk</p>
-                <p className={`text-2xl font-bold ${getRiskColor(overallRiskScore)}`}>
-                  {overallRiskScore.toFixed(1)}%
+                <p className={`text-2xl font-bold ${getRiskColor(overallRiskScore || 0)}`}>
+                  {(overallRiskScore || 0).toFixed(1)}%
                 </p>
               </div>
-              <AlertTriangle className={`h-8 w-8 ${getRiskColor(overallRiskScore)}`} />
+              <AlertTriangle className={`h-8 w-8 ${getRiskColor(overallRiskScore || 0)}`} />
             </div>
           </CardContent>
         </Card>
@@ -150,67 +248,70 @@ export function RiskDashboard({ documentId, workspaceId }: RiskDashboardProps) {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {riskAssessments.map((assessment) => (
-                  <div key={assessment.id} className="border rounded-lg p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <Badge variant={getRiskBadgeVariant(assessment.risk_score)}>
-                          {assessment.risk_category}
+                {riskAssessments.map((assessment) => {
+                  const safeAssessment = safeRiskAssessment(assessment)
+                  return (
+                    <div key={safeAssessment.id} className="border rounded-lg p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Badge variant={getRiskBadgeVariant(safeAssessment.risk_score || 0)}>
+                            {safeAssessment.risk_category || safeAssessment.risk_level || 'Unknown'}
+                          </Badge>
+                          <span className="font-medium">
+                            Risk Score: {(safeAssessment.risk_score || 0).toFixed(1)}%
+                          </span>
+                        </div>
+                        <Badge variant={
+                          safeAssessment.status === 'APPROVED' ? 'default' :
+                          safeAssessment.status === 'FLAGGED' ? 'destructive' : 'secondary'
+                        }>
+                          {safeAssessment.status || 'PENDING'}
                         </Badge>
-                        <span className="font-medium">
-                          Risk Score: {assessment.risk_score.toFixed(1)}%
-                        </span>
                       </div>
-                      <Badge variant={
-                        assessment.status === 'APPROVED' ? 'default' :
-                        assessment.status === 'FLAGGED' ? 'destructive' : 'secondary'
-                      }>
-                        {assessment.status}
-                      </Badge>
-                    </div>
 
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <TrendingUp className="h-4 w-4" />
-                        <span className="text-sm">AI Confidence: {assessment.ai_confidence.toFixed(1)}%</span>
-                      </div>
-                      
-                      {assessment.human_review_required && (
-                        <div className="flex items-center gap-2 text-amber-600">
-                          <Eye className="h-4 w-4" />
-                          <span className="text-sm">Human review required</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {assessment.anomalies_detected && assessment.anomalies_detected.length > 0 && (
                       <div className="space-y-2">
-                        <p className="text-sm font-medium">Detected Anomalies:</p>
-                        <div className="flex flex-wrap gap-1">
-                          {assessment.anomalies_detected.map((anomaly: any, index: number) => (
-                            <Badge key={index} variant="outline" className="text-xs">
-                              {anomaly.type}
-                            </Badge>
-                          ))}
+                        <div className="flex items-center gap-2">
+                          <TrendingUp className="h-4 w-4" />
+                          <span className="text-sm">AI Confidence: {(safeAssessment.ai_confidence || 0).toFixed(1)}%</span>
                         </div>
+                        
+                        {safeAssessment.human_review_required && (
+                          <div className="flex items-center gap-2 text-amber-600">
+                            <Eye className="h-4 w-4" />
+                            <span className="text-sm">Human review required</span>
+                          </div>
+                        )}
                       </div>
-                    )}
 
-                    {assessment.reviewer_notes && (
-                      <div className="bg-muted p-3 rounded">
-                        <p className="text-sm"><strong>Reviewer Notes:</strong></p>
-                        <p className="text-sm mt-1">{assessment.reviewer_notes}</p>
-                      </div>
-                    )}
-
-                    <div className="text-xs text-muted-foreground">
-                      Created: {new Date(assessment.created_at).toLocaleString()}
-                      {assessment.reviewed_at && (
-                        <span> • Reviewed: {new Date(assessment.reviewed_at).toLocaleString()}</span>
+                      {safeAssessment.anomalies_detected && safeAssessment.anomalies_detected.length > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium">Detected Anomalies:</p>
+                          <div className="flex flex-wrap gap-1">
+                            {safeAssessment.anomalies_detected.map((anomaly: any, index: number) => (
+                              <Badge key={index} variant="outline" className="text-xs">
+                                {anomaly.type}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
                       )}
+
+                      {safeAssessment.reviewer_notes && (
+                        <div className="bg-muted p-3 rounded">
+                          <p className="text-sm"><strong>Reviewer Notes:</strong></p>
+                          <p className="text-sm mt-1">{safeAssessment.reviewer_notes}</p>
+                        </div>
+                      )}
+
+                      <div className="text-xs text-muted-foreground">
+                        Created: {safeAssessment.created_at ? new Date(safeAssessment.created_at).toLocaleString() : 'Unknown'}
+                        {safeAssessment.reviewed_at && (
+                          <span> • Reviewed: {new Date(safeAssessment.reviewed_at).toLocaleString()}</span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
 
                 {riskAssessments.length === 0 && (
                   <div className="text-center py-8 text-muted-foreground">

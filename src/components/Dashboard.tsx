@@ -15,13 +15,17 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { LogOutIcon, FileTextIcon, UploadIcon, TableIcon, BarChart3, Users, History, Activity, RefreshCw, Shield, AlertTriangle, CheckCircle, CheckSquare, FileText, MessageSquare, Download } from 'lucide-react'
+import { LogOutIcon, FileTextIcon, UploadIcon, TableIcon, BarChart3, Users, History, Activity, RefreshCw, Shield, AlertTriangle, CheckCircle, CheckSquare, FileText, MessageSquare, Download, Trash2, Settings } from 'lucide-react'
 import { Document, ParsedData } from '@/types'
 import { RiskDashboard } from '@/components/RiskDashboard'
 import { WorkflowManager } from '@/components/WorkflowManager'
 import { ReviewComments } from '@/components/ReviewComments'
 import { ExportOptions } from '@/components/ExportOptions'
 import { DataTableExportOptions } from '@/components/DataTableExportOptions'
+import { RoleManagement } from '@/components/RoleManagement'
+import { RoleBasedAuth } from '@/lib/auth'
+import { DeleteService } from '@/lib/delete-service'
+import ComplianceManager from '@/components/ComplianceManager'
 
 export function Dashboard() {
   const {
@@ -31,11 +35,13 @@ export function Dashboard() {
     setDocuments,
     parsedData,
     setParsedData,
+    removeDocument,
+    removeParsedData,
     isLoading,
     setIsLoading
   } = useAppStore()
 
-  const [activeTab, setActiveTab] = useState<'upload' | 'documents' | 'data' | 'analytics' | 'collaboration' | 'versions' | 'activity' | 'risk-management' | 'workflow' | 'compliance' | 'reviews' | 'export'>('upload')
+  const [activeTab, setActiveTab] = useState<'upload' | 'documents' | 'data' | 'analytics' | 'collaboration' | 'versions' | 'activity' | 'risk-management' | 'workflow' | 'compliance' | 'reviews' | 'export' | 'roles'>('upload')
   const [processingFiles, setProcessingFiles] = useState<string[]>([])
   const [selectedDocument, setSelectedDocument] = useState<string | null>(null)
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
@@ -51,13 +57,27 @@ export function Dashboard() {
   const [complianceLoading, setComplianceLoading] = useState(false)
 
   useEffect(() => {
-    if (user) {
-      loadUserDocuments()
-      loadUserData()
-      loadAnalyticsData()
-      loadComplianceData()
+    const loadUserProfile = async () => {
+      if (user) {
+        try {
+          // Load the user's profile with role information
+          const userProfile = await RoleBasedAuth.getCurrentUser()
+          if (userProfile) {
+            setUser(userProfile)
+          }
+          
+          loadUserDocuments()
+          loadUserData()
+          loadAnalyticsData()
+          loadComplianceData()
+        } catch (error) {
+          console.error('Error loading user profile:', error)
+        }
+      }
     }
-  }, [user])
+    
+    loadUserProfile()
+  }, [user?.id]) // Only depend on user ID to avoid infinite loops
 
   // Load analytics data when workspace changes
   useEffect(() => {
@@ -116,10 +136,18 @@ export function Dashboard() {
     
     setAnalyticsLoading(true)
     try {
-      // Temporarily use demo user data so dashboard shows live data immediately
-      const demoUserId = 'demo-user-2024'
-      const data = await AnalyticsService.getRealAnalytics(demoUserId, selectedWorkspace?.id)
-      setAnalyticsData(data)
+      // Get the current authenticated user
+      const { data: authData } = await supabase.auth.getUser()
+      const currentUserEmail = authData?.user?.email
+      
+      if (currentUserEmail) {
+        console.log('Loading analytics for user:', currentUserEmail)
+        const data = await AnalyticsService.getRealAnalytics(currentUserEmail, selectedWorkspace?.id)
+        setAnalyticsData(data)
+      } else {
+        // Fallback to sample data if no user
+        setAnalyticsData(generateSampleAnalytics())
+      }
     } catch (error) {
       console.error('Error loading analytics:', error)
       // Fallback to sample data if real data fails
@@ -131,15 +159,27 @@ export function Dashboard() {
 
   const loadUserDocuments = async () => {
     try {
-      // Temporarily use demo user data so documents show up immediately
-      const demoUserId = 'demo-user-2024'
+      // Get the current authenticated user
+      const { data: authData } = await supabase.auth.getUser()
+      const currentUserEmail = authData?.user?.email
+      
+      if (!currentUserEmail) {
+        console.log('No authenticated user found')
+        setDocuments([])
+        return
+      }
+      
+      console.log('Loading documents for user:', currentUserEmail)
+      
       const { data, error } = await supabase
         .from('documents')
         .select('*')
-        .eq('uploaded_by', demoUserId)
+        .eq('uploaded_by', currentUserEmail)
         .order('created_at', { ascending: false })
 
       if (error) throw error
+      
+      console.log(`Found ${data?.length || 0} documents for ${currentUserEmail}`)
       setDocuments(data || [])
     } catch (error) {
       console.error('Error loading documents:', error)
@@ -148,12 +188,20 @@ export function Dashboard() {
 
   const loadUserData = async () => {
     try {
-      // Get parsed data for demo user's documents
-      const demoUserId = 'demo-user-2024'
+      // Get the current authenticated user
+      const { data: authData } = await supabase.auth.getUser()
+      const currentUserEmail = authData?.user?.email
+      
+      if (!currentUserEmail) {
+        console.log('No authenticated user found for parsed data')
+        setParsedData([])
+        return
+      }
+      
       const { data: userDocs } = await supabase
         .from('documents')
         .select('id')
-        .eq('uploaded_by', demoUserId)
+        .eq('uploaded_by', currentUserEmail)
 
       if (userDocs && userDocs.length > 0) {
         const docIds = userDocs.map(doc => doc.id)
@@ -164,6 +212,7 @@ export function Dashboard() {
           .order('created_at', { ascending: false })
 
         if (error) throw error
+        console.log(`Found ${data?.length || 0} parsed data entries for ${currentUserEmail}`)
         setParsedData(data || [])
       } else {
         setParsedData([])
@@ -185,13 +234,17 @@ export function Dashboard() {
           setProgress(0)
           
           // Log audit event for file upload
-          await AuditingService.logAuditEvent({
-            table_name: 'documents',
-            record_id: '',
-            action_type: 'CREATE',
-            new_values: { filename: file.name, size: file.size },
-            risk_level: 'LOW'
-          })
+          try {
+            await AuditingService.logAuditEvent({
+              table_name: 'documents',
+              record_id: '',
+              action_type: 'CREATE',
+              new_values: { filename: file.name, size: file.size },
+              risk_level: 'LOW'
+            })
+          } catch (auditError) {
+            console.warn('Audit logging failed for file upload:', auditError)
+          }
 
           // Upload file to Supabase Storage
           const fileExt = file.name.split('.').pop()
@@ -359,6 +412,78 @@ export function Dashboard() {
     }
   }
 
+  // Delete handlers (ADMIN ONLY - SOFT DELETE)
+  const handleDeleteDocument = async (documentId: string) => {
+    if (!user?.id) return
+
+    // Check if user is admin
+    const isAdmin = user.role === 'admin' || (user.permissions && user.permissions.includes('document:delete'))
+    
+    if (!isAdmin) {
+      alert('Only administrators can delete documents.')
+      return
+    }
+
+    const confirmed = window.confirm('Are you sure you want to delete this document? This will mark it as deleted but can be restored by an admin.')
+    if (!confirmed) return
+
+    try {
+      setIsLoading(true)
+      
+      const result = await DeleteService.softDeleteDocument(documentId, user.id)
+
+      if (result.success) {
+        // Remove from local state (soft deleted records are hidden from view)
+        removeDocument(documentId)
+        // Also remove related parsed data from view
+        const relatedParsedData = parsedData.filter(data => data.document_id === documentId)
+        relatedParsedData.forEach(data => removeParsedData(data.id))
+        alert('Document deleted successfully! (Can be restored by admin)')
+      } else {
+        alert(`Failed to delete document: ${result.error}`)
+      }
+    } catch (error: any) {
+      console.error('Delete document error:', error)
+      alert(`Error deleting document: ${error.message}`)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleDeleteParsedData = async (parsedDataId: string) => {
+    if (!user?.id) return
+
+    // Check if user is admin
+    const isAdmin = user.role === 'admin' || (user.permissions && user.permissions.includes('document:delete'))
+    
+    if (!isAdmin) {
+      alert('Only administrators can delete parsed data.')
+      return
+    }
+
+    const confirmed = window.confirm('Are you sure you want to delete this parsed data record? This will mark it as deleted but can be restored by an admin.')
+    if (!confirmed) return
+
+    try {
+      setIsLoading(true)
+      
+      const result = await DeleteService.softDeleteParsedData(parsedDataId, user.id)
+
+      if (result.success) {
+        // Remove from local state (soft deleted records are hidden from view)
+        removeParsedData(parsedDataId)
+        alert('Parsed data deleted successfully! (Can be restored by admin)')
+      } else {
+        alert(`Failed to delete parsed data: ${result.error}`)
+      }
+    } catch (error: any) {
+      console.error('Delete parsed data error:', error)
+      alert(`Error deleting parsed data: ${error.message}`)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   // Define columns for the data table
   const dataColumns: ColumnDef<ParsedData>[] = [
     {
@@ -400,6 +525,30 @@ export function Dashboard() {
         const date = new Date(row.getValue('created_at') as string)
         return date.toLocaleDateString()
       }
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      cell: ({ row }) => {
+        const parsedData = row.original
+        const isAdmin = user?.role === 'admin' || (user?.permissions && user.permissions.includes('document:delete'))
+        
+        return (
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={!isAdmin}
+            onClick={(e) => {
+              e.stopPropagation()
+              handleDeleteParsedData(parsedData.id)
+            }}
+            title={isAdmin ? 'Delete parsed data (soft delete)' : 'Only administrators can delete parsed data'}
+          >
+            <Trash2 className="h-4 w-4" />
+            {!isAdmin && <span className="ml-1 text-xs">(Admin Only)</span>}
+          </Button>
+        )
+      }
     }
   ]
 
@@ -426,6 +575,30 @@ export function Dashboard() {
       cell: ({ row }) => {
         const date = new Date(row.getValue('created_at') as string)
         return date.toLocaleDateString()
+      }
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      cell: ({ row }) => {
+        const document = row.original
+        const isAdmin = user?.role === 'admin' || (user?.permissions && user.permissions.includes('document:delete'))
+        
+        return (
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={!isAdmin}
+            onClick={(e) => {
+              e.stopPropagation()
+              handleDeleteDocument(document.id)
+            }}
+            title={isAdmin ? 'Delete document (soft delete)' : 'Only administrators can delete documents'}
+          >
+            <Trash2 className="h-4 w-4" />
+            {!isAdmin && <span className="ml-1 text-xs">(Admin Only)</span>}
+          </Button>
+        )
       }
     }
   ]
@@ -584,6 +757,17 @@ export function Dashboard() {
               <Download className="h-4 w-4 inline mr-2" />
               Export
             </button>
+            <button
+              className={`py-4 px-2 border-b-2 transition-colors whitespace-nowrap ${
+                activeTab === 'roles'
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+              onClick={() => setActiveTab('roles')}
+            >
+              <Shield className="h-4 w-4 inline mr-2" />
+              User Roles
+            </button>
           </div>
         </div>
       </nav>
@@ -628,7 +812,7 @@ export function Dashboard() {
               <Card>
                 <CardContent className="p-4">
                   <div className="text-sm text-muted-foreground">
-                    Selected document: <span className="font-medium">{documents.find(d => d.id === selectedDocumentId)?.name}</span>
+                    Selected document: <span className="font-medium">{documents.find(d => d.id === selectedDocumentId)?.filename || documents.find(d => d.id === selectedDocumentId)?.name}</span>
                     <Button
                       variant="outline"
                       size="sm"
@@ -649,7 +833,7 @@ export function Dashboard() {
               onRowClick={(document: any) => {
                 setSelectedDocumentId(document.id)
                 // Show a notification that the document was selected
-                console.log('Selected document:', document.name)
+                console.log('Selected document:', document.filename || document.name)
               }}
             />
           </div>
@@ -802,7 +986,7 @@ export function Dashboard() {
                         onClick={() => setSelectedDocument(doc.id)}
                       >
                         <FileTextIcon className="h-4 w-4 mr-2" />
-                        {doc.name}
+                        {doc.filename || doc.name}
                       </Button>
                     ))}
                   </div>
@@ -860,22 +1044,10 @@ export function Dashboard() {
               <h2 className="text-3xl font-bold tracking-tight">Workflow Management</h2>
             </div>
             
-            {selectedDocumentId ? (
-              <WorkflowManager 
-                documentId={selectedDocumentId}
-                workspaceId={selectedWorkspace?.id}
-              />
-            ) : (
-              <Card>
-                <CardContent className="p-8 text-center">
-                  <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                  <h3 className="text-lg font-medium mb-2">Select a Document</h3>
-                  <p className="text-muted-foreground">
-                    Choose a document from the Documents tab to view its workflow status and manage reviews.
-                  </p>
-                </CardContent>
-              </Card>
-            )}
+            <WorkflowManager 
+              documentId={selectedDocumentId || undefined}
+              workspaceId={selectedWorkspace?.id}
+            />
           </div>
         )}
 
@@ -883,20 +1055,25 @@ export function Dashboard() {
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-3xl font-bold tracking-tight">Compliance Dashboard</h2>
-              {complianceData?.isDemo && (
-                <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
-                  Demo Mode
-                </Badge>
-              )}
-              <Button 
-                onClick={loadComplianceData} 
-                disabled={complianceLoading}
-                size="sm"
-                variant="outline"
-              >
-                <RefreshCw className={`h-4 w-4 mr-2 ${complianceLoading ? 'animate-spin' : ''}`} />
-                Refresh
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button 
+                  onClick={() => window.open('/compliance', '_blank')}
+                  size="sm"
+                  variant="default"
+                >
+                  <Settings className="h-4 w-4 mr-2" />
+                  Manage Compliance
+                </Button>
+                <Button 
+                  onClick={loadComplianceData} 
+                  disabled={complianceLoading}
+                  size="sm"
+                  variant="outline"
+                >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${complianceLoading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </Button>
+              </div>
             </div>
             
             {complianceLoading ? (
@@ -1119,6 +1296,9 @@ export function Dashboard() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Full Compliance Management Interface */}
+            <ComplianceManager />
           </div>
         )}
 
@@ -1139,27 +1319,55 @@ export function Dashboard() {
                     <p>Upload documents to see them here and start the review process.</p>
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    {documents.map((doc) => (
-                      <div key={doc.id} className="p-4 border rounded-lg">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-sm text-muted-foreground">Document:</p>
-                            <p className="text-lg font-medium">{doc.name}</p>
-                          </div>
-                          <Button variant="outline" size="sm">
-                            View Details
-                          </Button>
-                        </div>
-                        <div className="mt-2">
-                          <p className="text-sm text-muted-foreground">Reviews:</p>
-                          <div className="space-y-2">
-                            {/* Render reviews for the document */}
-                            <ReviewComments documentId={doc.id} />
-                          </div>
-                        </div>
-                      </div>
+                  <div className="space-y-6">
+                    {documents.slice(0, 5).map((doc) => (
+                      <Card key={doc.id} className="border-l-4 border-l-blue-500">
+                        <CardHeader>
+                          <CardTitle className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <FileText className="h-5 w-5 text-blue-600" />
+                              <div>
+                                <span className="text-lg">{doc.filename || doc.name}</span>
+                                <p className="text-sm text-muted-foreground font-normal">
+                                  Uploaded {new Date(doc.created_at).toLocaleDateString()} • 
+                                  {(doc.file_size / 1024 / 1024).toFixed(2)} MB
+                                </p>
+                              </div>
+                            </div>
+                            <Badge variant="outline">
+                              {doc.mime_type}
+                            </Badge>
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <ReviewComments 
+                            documentId={doc.id} 
+                            documentName={doc.filename || doc.name}
+                            onCommentAdded={() => {
+                              // Optionally refresh data or show notification
+                              console.log(`Comment added to ${doc.filename || doc.name}`)
+                            }}
+                          />
+                        </CardContent>
+                      </Card>
                     ))}
+                    
+                    {documents.length > 5 && (
+                      <Card>
+                        <CardContent className="pt-6 text-center">
+                          <p className="text-muted-foreground">
+                            And {documents.length - 5} more documents...
+                          </p>
+                          <Button 
+                            variant="outline" 
+                            className="mt-2"
+                            onClick={() => setActiveTab('documents')}
+                          >
+                            View All Documents
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    )}
                   </div>
                 )}
               </CardContent>
@@ -1201,6 +1409,12 @@ export function Dashboard() {
             </Card>
           </div>
         )}
+
+        {activeTab === 'roles' && (
+          <div className="space-y-6">
+            <RoleManagement currentUser={user} />
+          </div>
+        )}
       </main>
     </div>
   )
@@ -1217,7 +1431,7 @@ function ActivityFeed({ userId, workspaceId }: { userId: string; workspaceId?: s
       // Get recent document uploads as activity
       let query = supabase
         .from('documents')
-        .select('id, name, created_at, uploaded_by')
+        .select('id, filename, created_at, uploaded_by')
         .order('created_at', { ascending: false })
         .limit(10)
 
@@ -1235,7 +1449,7 @@ function ActivityFeed({ userId, workspaceId }: { userId: string; workspaceId?: s
       const activityData = data?.map(doc => ({
         id: doc.id,
         action: 'document_uploaded',
-        description: `Uploaded document: ${doc.name}`,
+        description: `Uploaded document: ${doc.filename}`,
         created_at: doc.created_at,
         user_id: doc.uploaded_by
       })) || []

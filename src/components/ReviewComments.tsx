@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react'
-import { MessageSquare, Send, User, Calendar, Edit, Trash2, Reply } from 'lucide-react'
+import { MessageSquare, Send, User, Calendar, Edit, Trash2, Reply, Eye, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { DocumentViewer } from '@/components/DocumentViewer'
 import { supabase } from '@/lib/supabase'
 
 interface Comment {
@@ -23,12 +24,14 @@ interface Comment {
 
 interface ReviewCommentsProps {
   documentId: string
-  documentName: string
+  documentName?: string
   onCommentAdded?: () => void
 }
 
 export function ReviewComments({ documentId, documentName, onCommentAdded }: ReviewCommentsProps) {
   const [comments, setComments] = useState<Comment[]>([])
+  const [document, setDocument] = useState<any>(null)
+  const [showViewer, setShowViewer] = useState(false)
   const [newComment, setNewComment] = useState('')
   const [commentType, setCommentType] = useState<'review' | 'feedback' | 'question' | 'approval'>('review')
   const [isLoading, setIsLoading] = useState(false)
@@ -37,7 +40,23 @@ export function ReviewComments({ documentId, documentName, onCommentAdded }: Rev
 
   useEffect(() => {
     loadComments()
+    loadDocument()
   }, [documentId])
+
+  const loadDocument = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('documents')
+        .select('*')
+        .eq('id', documentId)
+        .single()
+
+      if (error) throw error
+      setDocument(data)
+    } catch (error) {
+      console.error('Error loading document:', error)
+    }
+  }
 
   const loadComments = async () => {
     try {
@@ -154,12 +173,57 @@ export function ReviewComments({ documentId, documentName, onCommentAdded }: Rev
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <MessageSquare className="h-5 w-5" />
-          Review Comments - {documentName}
+        <CardTitle className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="h-5 w-5" />
+            <div>
+              <span>Review Comments</span>
+              {(documentName || document?.name) && (
+                <p className="text-sm text-muted-foreground font-normal">
+                  Document: {documentName || document?.name}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowViewer(!showViewer)}
+              disabled={!document}
+            >
+              <Eye className="h-4 w-4 mr-2" />
+              {showViewer ? 'Hide Document' : 'View Document'}
+            </Button>
+          </div>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Document Name Banner */}
+        {document && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="flex items-center gap-3">
+              <FileText className="h-5 w-5 text-blue-600" />
+              <div>
+                <p className="font-medium text-blue-900">{document.name}</p>
+                <p className="text-sm text-blue-700">
+                  Uploaded {new Date(document.created_at).toLocaleDateString()} • 
+                  {(document.file_size / 1024 / 1024).toFixed(2)} MB • 
+                  {document.mime_type}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Document Viewer */}
+        {showViewer && document && (
+          <DocumentViewer 
+            document={document} 
+            onClose={() => setShowViewer(false)}
+          />
+        )}
+
         {/* Add New Comment */}
         <div className="space-y-3 p-4 border rounded-lg bg-muted/30">
           <div className="flex gap-2">

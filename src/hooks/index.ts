@@ -17,7 +17,7 @@ export function useDocuments(userId: string | undefined) {
       const { data, error } = await supabase
         .from('documents')
         .select('*')
-        .eq('user_id', userId)
+        .eq('uploaded_by', userId)
         .order('created_at', { ascending: false })
 
       if (error) throw error
@@ -70,10 +70,11 @@ export function useParsedData(userId: string | undefined) {
     setError(null)
 
     try {
+      // Note: parsed_data table doesn't have direct user association
+      // For now, fetch all parsed data - this should be improved with proper foreign keys
       const { data, error } = await supabase
         .from('parsed_data')
         .select('*')
-        .eq('user_id', userId)
         .order('created_at', { ascending: false })
 
       if (error) throw error

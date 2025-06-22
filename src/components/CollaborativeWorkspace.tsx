@@ -110,10 +110,17 @@ export function CollaborativeWorkspace({ currentUserId, workspace, onWorkspaceCh
         `)
         .eq('workspace_id', workspaceId)
 
-      if (error) throw error
-      setMembers(data || [])
+      if (error) {
+        console.error('Error loading members:', error)
+        setMembers([])
+        return
+      }
+      
+      // Type cast the data to avoid parser errors
+      setMembers((data as any) || [])
     } catch (error) {
       console.error('Error loading members:', error)
+      setMembers([])
     }
   }, [])
 
@@ -130,8 +137,14 @@ export function CollaborativeWorkspace({ currentUserId, workspace, onWorkspaceCh
         .eq('is_active', true)
         .gte('last_activity', new Date(Date.now() - 5 * 60 * 1000).toISOString()) // Active within 5 minutes
 
-      if (error) throw error
-      setActiveSessions(data || [])
+      if (error) {
+        console.error('Error loading active sessions:', error)
+        setActiveSessions([])
+        return
+      }
+      
+      // Type cast the data to avoid parser errors
+      setActiveSessions((data as any) || [])
     } catch (error) {
       console.error('Error loading active sessions:', error)
     }

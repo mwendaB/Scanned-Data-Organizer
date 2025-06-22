@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { useAppStore } from '@/store/useAppStore'
 import { AuthPage } from '@/components/AuthForm'
 import { Dashboard } from '@/components/Dashboard'
-import { User } from '@supabase/supabase-js'
+import { RoleBasedAuth } from '@/lib/auth'
 
 export default function Home() {
   const [loading, setLoading] = useState(true)
@@ -16,12 +16,10 @@ export default function Home() {
     const getInitialSession = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (session?.user) {
-        setUser({
-          id: session.user.id,
-          email: session.user.email || '',
-          created_at: session.user.created_at,
-          updated_at: session.user.updated_at || session.user.created_at
-        })
+        const userWithRole = await RoleBasedAuth.getCurrentUser()
+        if (userWithRole) {
+          setUser(userWithRole)
+        }
       }
       setLoading(false)
     }
@@ -32,12 +30,10 @@ export default function Home() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (event === 'SIGNED_IN' && session?.user) {
-          setUser({
-            id: session.user.id,
-            email: session.user.email || '',
-            created_at: session.user.created_at,
-            updated_at: session.user.updated_at || session.user.created_at
-          })
+          const userWithRole = await RoleBasedAuth.getCurrentUser()
+          if (userWithRole) {
+            setUser(userWithRole)
+          }
         } else if (event === 'SIGNED_OUT') {
           setUser(null)
         }

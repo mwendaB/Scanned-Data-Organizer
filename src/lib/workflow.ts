@@ -219,22 +219,82 @@ export class ComplianceService {
     return data || []
   }
 
-  // Get compliance checks for a document
+  // Get compliance checks for a document (with manual join to avoid relationship issues)
   static async getDocumentComplianceChecks(documentId: string): Promise<ComplianceCheck[]> {
-    const { data, error } = await supabase
-      .from('compliance_checks')
-      .select(`
-        *,
-        compliance_frameworks (
-          name,
-          description
-        )
-      `)
-      .eq('document_id', documentId)
-      .order('created_at', { ascending: false })
+    try {
+      // Get compliance checks for the document
+      const { data: checks, error: checksError } = await supabase
+        .from('compliance_checks')
+        .select('*')
+        .eq('document_id', documentId)
+        .order('created_at', { ascending: false })
 
-    if (error) throw error
-    return data || []
+      if (checksError) throw checksError
+
+      // Get all compliance frameworks
+      const { data: frameworks, error: frameworksError } = await supabase
+        .from('compliance_frameworks')
+        .select('*')
+        .eq('is_active', true)
+
+      if (frameworksError) throw frameworksError
+
+      // Manual join to include framework data
+      const joinedData = (checks || []).map(check => ({
+        ...check,
+        framework: (frameworks || []).find(fw => fw.id === check.framework_id) || {
+          id: check.framework_id,
+          name: 'Unknown Framework',
+          description: 'Framework not found',
+          requirements: {},
+          is_active: false
+        }
+      }))
+
+      return joinedData
+    } catch (error) {
+      console.error('Error getting compliance checks for document:', error)
+      return []
+    }
+  }
+
+  // Helper function: Get compliance checks with frameworks (manual join)
+  static async getComplianceChecksWithFrameworks(documentId?: string): Promise<{ data: any[], error: any }> {
+    try {
+      // Build query for compliance checks
+      let checksQuery = supabase.from('compliance_checks').select('*')
+      
+      if (documentId) {
+        checksQuery = checksQuery.eq('document_id', documentId)
+      }
+      
+      const { data: checks, error: checksError } = await checksQuery
+      if (checksError) throw checksError
+      
+      // Get all compliance frameworks
+      const { data: frameworks, error: frameworksError } = await supabase
+        .from('compliance_frameworks')
+        .select('*')
+        .eq('is_active', true)
+      
+      if (frameworksError) throw frameworksError
+      
+      // Manual join
+      const joinedData = (checks || []).map(check => ({
+        ...check,
+        framework: (frameworks || []).find(fw => fw.id === check.framework_id) || {
+          id: check.framework_id,
+          name: 'Unknown Framework',
+          description: 'Framework not found',
+          requirements: {},
+          is_active: false
+        }
+      }))
+      
+      return { data: joinedData, error: null }
+    } catch (error) {
+      return { data: [], error }
+    }
   }
 
   // Run compliance checks for a document
@@ -273,27 +333,29 @@ export class ComplianceService {
     return checks
   }
 
-  // Calculate overall compliance score for all documents
+  // Calculate overall compliance score for all documents (with manual join)
   static async getOverallComplianceScore(): Promise<{ [framework: string]: number }> {
     try {
-      // Get all compliance checks grouped by framework
-      const { data, error } = await supabase
+      // Get all compliance checks
+      const { data: checks, error: checksError } = await supabase
         .from('compliance_checks')
-        .select(`
-          framework_id,
-          score,
-          status,
-          compliance_frameworks (
-            name
-          )
-        `)
+        .select('framework_id, score, status')
 
-      if (error) throw error
+      if (checksError) throw checksError
+
+      // Get all compliance frameworks
+      const { data: frameworks, error: frameworksError } = await supabase
+        .from('compliance_frameworks')
+        .select('id, name')
+
+      if (frameworksError) throw frameworksError
 
       const frameworkScores: { [key: string]: { total: number; count: number; name: string } } = {}
 
-      data?.forEach(check => {
-        const frameworkName = (check as any).compliance_frameworks?.name || check.framework_id
+      // Manual join and calculate scores
+      ;(checks || []).forEach(check => {
+        const framework = (frameworks || []).find(fw => fw.id === check.framework_id)
+        const frameworkName = framework?.name || check.framework_id
         
         if (!frameworkScores[check.framework_id]) {
           frameworkScores[check.framework_id] = { total: 0, count: 0, name: frameworkName }
