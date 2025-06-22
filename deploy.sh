@@ -1,7 +1,13 @@
 #!/bin/bash
 
-# Deployment script for Scanned Data Organizer to Vercel
-echo "🚀 Starting deployment to Vercel..."
+# Vercel Deployment Script for Scanned Data Organizer
+# This script will guide you through deploying to Vercel
+
+set -e
+
+echo "🚀 Scanned Data Organizer - Vercel Deployment Script"
+echo "===================================================="
+echo ""
 
 # Check if we're in the right directory
 if [ ! -f "package.json" ]; then
@@ -9,43 +15,45 @@ if [ ! -f "package.json" ]; then
     exit 1
 fi
 
-# Check if git is initialized
-if [ ! -d ".git" ]; then
-    echo "❌ Error: Git repository not found. Please initialize git first."
+# Check if .env.local exists
+if [ ! -f ".env.local" ]; then
+    echo "❌ Error: .env.local file not found. Please ensure environment variables are set."
     exit 1
 fi
 
-# Clean up the repository
-echo "🧹 Cleaning up repository..."
-
-# Add all new files
-echo "📦 Adding new files to git..."
-git add .
-
-# Check git status
-echo "📊 Current git status:"
-git status --short
-
-# Commit changes
-echo "💾 Committing changes..."
-read -p "Enter commit message (default: 'Deploy compliance management system'): " commit_msg
-commit_msg=${commit_msg:-"Deploy compliance management system"}
-git commit -m "$commit_msg"
-
-# Push to GitHub
-echo "⬆️ Pushing to GitHub..."
-git push origin main
-
-echo "✅ Code pushed to GitHub successfully!"
+echo "✅ Environment variables file found"
 echo ""
-echo "🌐 Next steps for Vercel deployment:"
-echo "1. Go to https://vercel.com/dashboard"
-echo "2. Click 'New Project'"
-echo "3. Import your GitHub repository: mwendaB/Scanned-Data-Organizer"
-echo "4. Configure environment variables:"
-echo "   - NEXT_PUBLIC_SUPABASE_URL"
-echo "   - NEXT_PUBLIC_SUPABASE_ANON_KEY"
-echo "   - SUPABASE_SERVICE_ROLE_KEY"
-echo "5. Deploy!"
+
+# Run a final build test
+echo "� Running final build test..."
+npm run build
+
+if [ $? -eq 0 ]; then
+    echo "✅ Build successful!"
+else
+    echo "❌ Build failed. Please fix any errors before deploying."
+    exit 1
+fi
+
 echo ""
-echo "📋 Your environment variables should be set to the same values from your .env.local file"
+echo "🌟 Ready to deploy to Vercel!"
+echo ""
+echo "📋 DEPLOYMENT OPTIONS:"
+echo ""
+echo "Option 1: Manual Deployment (Recommended)"
+echo "========================================="
+echo "1. Go to https://vercel.com and sign in with GitHub"
+echo "2. Click 'Add New Project'"
+echo "3. Import your 'Scanned-Data-Organizer' repository"
+echo "4. Add these environment variables:"
+echo ""
+echo "   NEXT_PUBLIC_SUPABASE_URL=https://blwlzzcrxoxngxoccbij.supabase.co"
+echo "   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsd2x6emNyeG94bmd4b2NjYmlqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA0MDE1NzQsImV4cCI6MjA2NTk3NzU3NH0.KYlsMfFVdIlly3NdnAnH5mSwi80niyEy0vKY4ChXAm4"
+echo "   SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJsd2x6emNyeG94bmd4b2NjYmlqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MDQwMTU3NCwiZXhwIjoyMDY1OTc3NTc0fQ.OWxznhLlJE0L1W8BHLLe3NYtdOuk5WcepOv5S_G9nEE"
+echo "   ADMIN_SETUP_PASSWORD=admin123secure"
+echo ""
+echo "5. Click Deploy and wait for completion!"
+echo ""
+echo "� For detailed instructions, see: VERCEL_DEPLOYMENT_GUIDE.md"
+echo ""
+echo "✨ Your app will be live at: https://your-project-name.vercel.app"
