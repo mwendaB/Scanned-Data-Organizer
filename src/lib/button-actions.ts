@@ -4,6 +4,14 @@ import { supabase } from '@/lib/supabase'
 import { RoleBasedAuth } from '@/lib/auth'
 import { DeleteService } from './delete-service'
 
+interface ExportFilters {
+  userId?: string
+  dateFrom?: string
+  dateTo?: string
+  tags?: string[]
+  fileType?: string
+}
+
 export class ButtonActionService {
   /**
    * Handle document upload with proper validation and error handling
@@ -20,12 +28,28 @@ export class ButtonActionService {
       }
 
       // Check file size (10MB limit)
-      if (file.size > 10 * 1024 * 1024) {
+      const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+      if (file.size > MAX_FILE_SIZE) {
         throw new Error('File size must be less than 10MB')
       }
 
+      // Validate file type
+      const allowedTypes = [
+        'application/pdf',
+        'image/jpeg',
+        'image/png',
+        'image/jpg',
+        'text/plain',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      ]
+      
+      if (!allowedTypes.includes(file.type)) {
+        throw new Error('File type not supported. Please upload PDF, images, or document files.')
+      }
+
       // Upload to Supabase storage
-      const fileName = `${Date.now()}-${file.name}`
+      const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from('documents')
         .upload(fileName, file)
@@ -35,13 +59,19 @@ export class ButtonActionService {
       // Create document record
       const documentData = {
         id: crypto.randomUUID(),
-        filename: file.name,
-        file_type: file.type,
-        file_size: file.size,
-        storage_path: uploadData.path,
+        user_id: userId,
         uploaded_by: userId,
+        filename: file.name,
+        name: file.name,
+        file_path: uploadData.path,
+        file_type: file.type,
+        mime_type: file.type,
+        file_size: file.size,
+        ocr_text: '',
+        parsed_data: [],
         tags: [],
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       }
 
       const { data: docData, error: docError } = await supabase
@@ -163,9 +193,10 @@ export class ButtonActionService {
         id: crypto.randomUUID(),
         document_id: documentId,
         user_id: userId,
-        content: content.trim(),
+        comment_text: content.trim(),
         comment_type: type,
-        status: 'open',
+        is_resolved: false,
+        priority: type === 'CONCERN' ? 'HIGH' : 'MEDIUM',
         created_at: new Date().toISOString()
       }
 
@@ -241,7 +272,7 @@ export class ButtonActionService {
   /**
    * Handle data export
    */
-  static async handleDataExport(tableType: string, format: string, filters?: any) {
+  static async handleDataExport(tableType: string, format: string, filters?: ExportFilters) {
     return ErrorHandler.safeApiCall(async () => {
       const currentUser = await UserManagementService.getCurrentUser()
       if (!currentUser) {
@@ -281,7 +312,7 @@ export class ButtonActionService {
   /**
    * Convert data to CSV format
    */
-  private static convertToCSV(data: any[]): string {
+  private static convertToCSV(data: Record<string, unknown>[]): string {
     if (!data || data.length === 0) return ''
 
     const headers = Object.keys(data[0])
@@ -357,9 +388,10 @@ export class ButtonActionService {
             errorCount++
           }
           results.push({ id: itemId, success: result.success, error: result.error })
-        } catch (error: any) {
+        } catch (error: unknown) {
           errorCount++
-          results.push({ id: itemId, success: false, error: error.message })
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+          results.push({ id: itemId, success: false, error: errorMessage })
         }
       }
 
@@ -392,60 +424,78 @@ export class ButtonActionService {
   }
 
   // Delete Operations
-  static async deleteDocument(documentId: string, userId?: string): Promise<void> {
-    try {
-      const result = await DeleteService.deleteDocument(documentId, userId)
+  static async deleteDocument(documentId: string, userId?: string): Promise<{ success: boolean; error?: string }> {
+    return ErrorHandler.safeApiCall(async () => {
+      const result = await DeleteService.deleteDocument(documentId, userId || '')
       if (!result.success) {
         throw new Error(result.error || 'Failed to delete document')
       }
-    } catch (error) {
-      ErrorHandler.handleError(error, 'Delete document failed')
-      throw error
-    }
+      return result
+    }, 'delete document', 'Document deleted successfully')
   }
 
-  static async deleteParsedData(parsedDataId: string, userId?: string): Promise<void> {
-    try {
-      const result = await DeleteService.deleteParsedData(parsedDataId, userId)
+  static async deleteParsedData(parsedDataId: string, userId?: string): Promise<{ success: boolean; error?: string }> {
+    return ErrorHandler.safeApiCall(async () => {
+      const result = await DeleteService.deleteParsedData(parsedDataId, userId || '')
       if (!result.success) {
         throw new Error(result.error || 'Failed to delete parsed data')
       }
-    } catch (error) {
-      ErrorHandler.handleError(error, 'Delete parsed data failed')
-      throw error
-    }
+      return result
+    }, 'delete parsed data', 'Parsed data deleted successfully')
   }
 
-  static async adminDeleteDocument(documentId: string, adminUserId: string): Promise<void> {
-    try {
+  static async adminDeleteDocument(documentId: string, adminUserId: string): Promise<{ success: boolean; error?: string }> {
+    return ErrorHandler.safeApiCall(async () => {
       const result = await DeleteService.adminDeleteDocument(documentId, adminUserId)
       if (!result.success) {
         throw new Error(result.error || 'Failed to delete document')
       }
-    } catch (error) {
-      ErrorHandler.handleError(error, 'Admin delete failed')
-      throw error
-    }
+      return result
+    }, 'admin delete document', 'Document deleted by admin successfully')
   }
 
   static async deleteBulkDocuments(documentIds: string[], userId?: string): Promise<{ deleted: number }> {
-    try {
-      const result = await DeleteService.deleteBulkDocuments(documentIds, userId)
-      if (!result.success) {
-        throw new Error(result.error || 'Bulk delete failed')
+    const result = await ErrorHandler.safeApiCall(async () => {
+      const currentUser = await UserManagementService.getCurrentUser()
+      if (!currentUser) {
+        throw new Error('Authentication required')
       }
-      return { deleted: result.deleted }
-    } catch (error) {
-      ErrorHandler.handleError(error, 'Bulk delete failed')
-      throw error
-    }
+
+      let deleted = 0
+      for (const documentId of documentIds) {
+        try {
+          const result = await DeleteService.deleteDocument(documentId, userId || '')
+          if (result.success) {
+            deleted++
+          }
+        } catch (error) {
+          console.error(`Failed to delete document ${documentId}:`, error)
+        }
+      }
+
+      return { deleted }
+    }, 'bulk delete documents', `${documentIds.length} documents processed`)
+
+    return result.data || { deleted: 0 }
   }
 
   static async canDeleteDocument(documentId: string, userId: string): Promise<boolean> {
     try {
-      return await DeleteService.canDeleteDocument(documentId, userId)
+      const currentUser = await UserManagementService.getCurrentUser()
+      if (!currentUser) return false
+
+      // Check if user owns the document or has admin permissions
+      const { data: document, error: fetchError } = await supabase
+        .from('documents')
+        .select('uploaded_by')
+        .eq('id', documentId)
+        .single()
+
+      if (fetchError) return false
+
+      return document.uploaded_by === userId || 
+             RoleBasedAuth.hasPermission(currentUser, 'document:delete')
     } catch (error) {
-      ErrorHandler.handleError(error, 'Permission check failed')
       return false
     }
   }

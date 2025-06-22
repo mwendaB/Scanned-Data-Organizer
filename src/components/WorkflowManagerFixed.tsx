@@ -1,19 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { CheckCircle, Clock, AlertCircle, User, MessageSquare, FileText, Play, Pause, Check, X, Eye, Shield, AlertTriangle } from 'lucide-react'
+import { CheckCircle, Clock, AlertCircle, User as UserIcon, MessageSquare, FileText, Play, Pause, Check, X, Shield } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { AuditingService, WorkflowInstance, ReviewComment } from '@/lib/auditing'
-import { WorkflowService } from '@/lib/workflow'
+import { WorkflowInstance, ReviewComment } from '@/lib/auditing'
 import { RoleBasedAuth } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
 import { DocumentViewer } from '@/components/DocumentViewer'
+import { ParsedData, User } from '@/types'
 
 interface WorkflowManagerProps {
   documentId?: string
-  workspaceId?: string
 }
 
 interface WorkflowStep {
@@ -42,19 +41,19 @@ interface Document {
   mime_type: string
   file_size: number
   ocr_text?: string
-  parsed_data?: any
+  parsed_data?: ParsedData[]
   created_at: string
   uploaded_by: string
   user_id?: string
 }
 
-export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProps) {
+export function WorkflowManager({ documentId }: WorkflowManagerProps) {
   const [workflows, setWorkflows] = useState<WorkflowInstance[]>([])
   const [currentWorkflow, setCurrentWorkflow] = useState<WorkflowInstance | null>(null)
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([])
   const [comments, setComments] = useState<ReviewComment[]>([])
   const [document, setDocument] = useState<Document | null>(null)
-  const [currentUser, setCurrentUser] = useState<any>(null)
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [showDocumentViewer, setShowDocumentViewer] = useState(false)
   const [newComment, setNewComment] = useState('')
   const [commentType, setCommentType] = useState<'GENERAL' | 'QUESTION' | 'CONCERN' | 'APPROVAL' | 'REJECTION'>('GENERAL')
@@ -69,7 +68,7 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
       setCurrentUser(user)
 
       if (documentId) {
-        // Load specific document workflow data
+        // Load specific document workflow data from Supabase
         const { data: docData, error: docError } = await supabase
           .from('documents')
           .select('*')
@@ -80,171 +79,79 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
           setDocument(docData)
         }
         
-        // Load workflow instances for this document
-        let workflowInstances = await WorkflowService.getDocumentWorkflowInstances(documentId)
+        // Load workflow instances for this document from Supabase
+        const { data: workflowData, error: workflowError } = await supabase
+          .from('workflow_instances')
+          .select('*')
+          .eq('document_id', documentId)
+          .order('created_at', { ascending: false })
         
-        if (!workflowInstances || workflowInstances.length === 0) {
-          // Create fallback data for specific document
-          workflowInstances = [
-            {
-              id: `workflow-${documentId}`,
-              workflow_id: 'document-review-workflow',
-              document_id: documentId,
-              initiated_by: 'mwenda0107@gmail.com',
-              current_step: 2,
-              status: 'IN_PROGRESS',
-              workflow_data: {
-                workflow_type: 'document_review',
-                priority: 'high',
-                estimated_completion: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()
-              },
-              due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-              created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+        if (!workflowError && workflowData) {
+          setWorkflows(workflowData)
+          if (workflowData.length > 0) {
+            setCurrentWorkflow(workflowData[0])
+            
+            // Load workflow steps for the current workflow
+            const { data: stepsData, error: stepsError } = await supabase
+              .from('workflow_steps')
+              .select('*')
+              .eq('workflow_instance_id', workflowData[0].id)
+              .order('step_number', { ascending: true })
+            
+            if (!stepsError && stepsData) {
+              setWorkflowSteps(stepsData)
             }
-          ]
+          }
         }
-        
-        setWorkflows(workflowInstances)
-        setCurrentWorkflow(workflowInstances[0])
 
-        // Load workflow steps
-        let steps = workflowInstances[0] 
-          ? await WorkflowService.getWorkflowSteps(workflowInstances[0].id)
-          : []
+        // Load comments for this document
+        const { data: commentsData, error: commentsError } = await supabase
+          .from('review_comments')
+          .select('*')
+          .eq('document_id', documentId)
+          .order('created_at', { ascending: false })
         
-        if (!steps || steps.length === 0) {
-          steps = [
-            {
-              id: 'step-1',
-              workflow_instance_id: workflowInstances[0]?.id || 'workflow-1',
-              step_number: 1,
-              step_name: 'Document Upload',
-              status: 'COMPLETED',
-              action_required: 'Upload and process document',
-              completed_by: 'mwenda0107@gmail.com',
-              completed_at: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
-              created_at: new Date().toISOString()
-            },
-            {
-              id: 'step-2',
-              workflow_instance_id: workflowInstances[0]?.id || 'workflow-1',
-              step_number: 2,
-              step_name: 'Review & Analysis',
-              status: 'IN_PROGRESS',
-              action_required: 'Analyze document content and assess risk',
-              assigned_to: 'mwenda0107@gmail.com',
-              started_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-              created_at: new Date().toISOString()
-            }
-          ]
+        if (!commentsError && commentsData) {
+          setComments(commentsData)
         }
-        setWorkflowSteps(steps)
 
       } else {
-        // Show aggregate workflow overview when no specific document is selected
+        // Load aggregate workflow data from Supabase when no specific document is selected
         console.log('Loading aggregate workflow data for all documents')
         
-        const overviewWorkflows: WorkflowInstance[] = [
-          {
-            id: 'overview-workflow-1',
-            workflow_id: 'financial-review-workflow',
-            document_id: 'financial_doc_1',
-            initiated_by: 'mwenda0107@gmail.com',
-            current_step: 3,
-            status: 'COMPLETED',
-            workflow_data: {
-              document_type: 'financial_report',
-              priority: 'high',
-              completion_date: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
-            },
-            due_date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
-            created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
-          },
-          {
-            id: 'overview-workflow-2',
-            workflow_id: 'contract-approval-workflow',
-            document_id: 'contract_doc_1',
-            initiated_by: 'mwenda0107@gmail.com',
-            current_step: 2,
-            status: 'IN_PROGRESS',
-            workflow_data: {
-              document_type: 'contract_amendment',
-              priority: 'medium',
-              estimated_completion: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()
-            },
-            due_date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
-            created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
-          },
-          {
-            id: 'overview-workflow-3',
-            workflow_id: 'audit-checklist-workflow',
-            document_id: 'audit_doc_1',
-            initiated_by: 'mwenda0107@gmail.com',
-            current_step: 1,
-            status: 'PENDING',
-            workflow_data: {
-              document_type: 'audit_checklist',
-              priority: 'medium',
-              estimated_completion: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-            },
-            due_date: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString(),
-            created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
+        // Get all workflow instances
+        const { data: allWorkflows, error: workflowsError } = await supabase
+          .from('workflow_instances')
+          .select(`
+            *,
+            documents(id, name, filename)
+          `)
+          .order('created_at', { ascending: false })
+          .limit(10)
+        
+        if (!workflowsError && allWorkflows) {
+          setWorkflows(allWorkflows)
+          
+          if (allWorkflows.length > 0) {
+            // Set the first in-progress workflow as current, or first one if none in progress
+            const inProgressWorkflow = allWorkflows.find(w => w.status === 'IN_PROGRESS')
+            setCurrentWorkflow(inProgressWorkflow || allWorkflows[0])
+            
+            // Load all workflow steps for overview
+            const workflowIds = allWorkflows.map(w => w.id)
+            const { data: allSteps, error: stepsError } = await supabase
+              .from('workflow_steps')
+              .select('*')
+              .in('workflow_instance_id', workflowIds)
+              .order('created_at', { ascending: false })
+            
+            if (!stepsError && allSteps) {
+              setWorkflowSteps(allSteps)
+            }
           }
-        ]
+        }
         
-        setWorkflows(overviewWorkflows)
-        setCurrentWorkflow(overviewWorkflows[1]) // Set the in-progress one as current
-        
-        const overviewSteps: WorkflowStep[] = [
-          {
-            id: 'overview-step-1',
-            workflow_instance_id: 'overview-workflow-1',
-            step_number: 1,
-            step_name: 'Document Processing',
-            status: 'COMPLETED',
-            action_required: 'Process and validate uploaded document',
-            completed_by: 'mwenda0107@gmail.com',
-            completed_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-            created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
-          },
-          {
-            id: 'overview-step-2',
-            workflow_instance_id: 'overview-workflow-2',
-            step_number: 1,
-            step_name: 'Initial Review',
-            status: 'COMPLETED',
-            action_required: 'Review contract terms and conditions',
-            completed_by: 'mwenda0107@gmail.com',
-            completed_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-            created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
-          },
-          {
-            id: 'overview-step-3',
-            workflow_instance_id: 'overview-workflow-2',
-            step_number: 2,
-            step_name: 'Legal Approval',
-            status: 'IN_PROGRESS',
-            action_required: 'Legal team review and approval',
-            assigned_role: 'legal_reviewer',
-            started_at: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-            due_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
-            created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
-          },
-          {
-            id: 'overview-step-4',
-            workflow_instance_id: 'overview-workflow-3',
-            step_number: 1,
-            step_name: 'Audit Planning',
-            status: 'PENDING',
-            action_required: 'Plan audit scope and timeline',
-            assigned_role: 'auditor',
-            due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-            created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
-          }
-        ]
-        
-        setWorkflowSteps(overviewSteps)
-        
+        // Set a generic overview document
         setDocument({
           id: 'overview-doc',
           name: 'Workflow Overview',
@@ -253,73 +160,29 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
           mime_type: 'application/pdf',
           file_size: 0,
           created_at: new Date().toISOString(),
-          uploaded_by: 'mwenda0107@gmail.com'
+          uploaded_by: user?.email || 'system'
         })
-      }
 
-      // Set fallback comments
-      setComments([
-        {
-          id: 'comment-1',
-          document_id: documentId || 'overview-doc',
-          user_id: 'mwenda0107@gmail.com',
-          comment: 'Document uploaded and initial processing completed successfully.',
-          comment_type: 'GENERAL',
-          status: 'ACTIVE',
-          created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
-        },
-        {
-          id: 'comment-2',
-          document_id: documentId || 'overview-doc',
-          user_id: 'mwenda0107@gmail.com',
-          comment: 'Please review the contract terms in section 3.2 for clarity.',
-          comment_type: 'CONCERN',
-          status: 'ACTIVE',
-          created_at: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString()
+        // Load recent comments across all documents for overview
+        const { data: allComments, error: commentsError } = await supabase
+          .from('review_comments')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(20)
+        
+        if (!commentsError && allComments) {
+          setComments(allComments)
         }
-      ])
+      }
 
     } catch (error) {
       console.error('Failed to load workflow data:', error)
-      // Set error fallback data
-      setWorkflows([
-        {
-          id: 'fallback-workflow',
-          workflow_id: 'audit-review-workflow',
-          document_id: documentId || 'fallback-doc',
-          initiated_by: 'mwenda0107@gmail.com',
-          current_step: 2,
-          status: 'IN_PROGRESS',
-          workflow_data: { type: 'document_review', priority: 'high' },
-          due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-          created_at: new Date().toISOString()
-        }
-      ])
-
-      setWorkflowSteps([
-        {
-          id: 'fallback-1',
-          workflow_instance_id: 'fallback-workflow',
-          step_number: 1,
-          step_name: 'Document Upload',
-          status: 'COMPLETED',
-          action_required: 'Upload and process document',
-          completed_by: 'mwenda0107@gmail.com',
-          completed_at: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
-          created_at: new Date().toISOString()
-        },
-        {
-          id: 'fallback-2',
-          workflow_instance_id: 'fallback-workflow',
-          step_number: 2,
-          step_name: 'Review & Analysis',
-          status: 'IN_PROGRESS',
-          action_required: 'Analyze document content and assess risk',
-          assigned_to: 'mwenda0107@gmail.com',
-          started_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-          created_at: new Date().toISOString()
-        }
-      ])
+      // Set minimal fallback state
+      setWorkflows([])
+      setWorkflowSteps([])
+      setComments([])
+      setCurrentWorkflow(null)
+      setDocument(null)
     } finally {
       setLoading(false)
     }
@@ -330,17 +193,25 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
   }, [loadWorkflowData])
 
   const addComment = async () => {
-    if (!newComment.trim()) return
+    if (!newComment.trim() || !currentUser) return
 
     try {
-      const comment = await AuditingService.addReviewComment({
-        document_id: documentId || 'overview-doc',
-        comment_text: newComment,
-        comment_type: commentType,
-        priority: commentType === 'CONCERN' ? 'HIGH' : 'MEDIUM'
-      })
+      const { data: comment, error } = await supabase
+        .from('review_comments')
+        .insert({
+          document_id: documentId || 'overview-doc',
+          user_id: currentUser.id || currentUser.email,
+          comment_text: newComment,
+          comment_type: commentType,
+          is_resolved: false,
+          priority: commentType === 'CONCERN' ? 'HIGH' : 'MEDIUM'
+        })
+        .select()
+        .single()
 
-      setComments(prev => [...prev, comment])
+      if (error) throw error
+
+      setComments(prev => [comment, ...prev])
       setNewComment('')
     } catch (error) {
       console.error('Failed to add comment:', error)
@@ -349,33 +220,48 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
 
   const updateStepStatus = async (stepId: string, status: WorkflowStep['status']) => {
     const step = workflowSteps.find(s => s.id === stepId)
-    if (!step || !canAccessStep(step)) {
+    if (!step || !canAccessStep(step) || !currentUser) {
       console.warn('User does not have permission to update this step')
       return
     }
 
     try {
-      setWorkflowSteps(prev => prev.map(step => 
-        step.id === stepId 
-          ? { 
-              ...step, 
-              status,
-              completed_at: status === 'COMPLETED' ? new Date().toISOString() : step.completed_at,
-              completed_by: status === 'COMPLETED' ? currentUser?.id : step.completed_by,
-              started_at: status === 'IN_PROGRESS' && !step.started_at ? new Date().toISOString() : step.started_at
-            }
-          : step
+      const updateData: Partial<WorkflowStep> = {
+        status,
+        ...(status === 'COMPLETED' && {
+          completed_at: new Date().toISOString(),
+          completed_by: currentUser.id || currentUser.email
+        }),
+        ...(status === 'IN_PROGRESS' && !step.started_at && {
+          started_at: new Date().toISOString()
+        })
+      }
+
+      const { error } = await supabase
+        .from('workflow_steps')
+        .update(updateData)
+        .eq('id', stepId)
+
+      if (error) throw error
+
+      // Update local state
+      setWorkflowSteps(prev => prev.map(s => 
+        s.id === stepId ? { ...s, ...updateData } : s
       ))
 
       // Log audit event
-      await AuditingService.logAuditEvent({
-        table_name: 'workflow_steps',
-        record_id: stepId,
-        action_type: 'UPDATE',
-        document_id: documentId || 'overview-doc',
-        new_values: { status },
-        risk_level: 'LOW'
-      })
+      await supabase
+        .from('audit_logs')
+        .insert({
+          table_name: 'workflow_steps',
+          record_id: stepId,
+          action_type: 'UPDATE',
+          user_id: currentUser.id || currentUser.email,
+          document_id: documentId || 'overview-doc',
+          new_values: { status },
+          risk_level: 'LOW'
+        })
+
     } catch (error) {
       console.error('Failed to update step status:', error)
     }
@@ -384,17 +270,6 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
   const canAccessStep = (step: WorkflowStep): boolean => {
     if (!currentUser) return false
     return RoleBasedAuth.canAccessWorkflowStep(currentUser, step)
-  }
-
-  const getStatusColor = (status: WorkflowStep['status']) => {
-    switch (status) {
-      case 'COMPLETED': return 'text-green-600'
-      case 'IN_PROGRESS': return 'text-blue-600'
-      case 'PENDING': return 'text-yellow-600'
-      case 'REJECTED': return 'text-red-600'
-      case 'SKIPPED': return 'text-gray-600'
-      default: return 'text-gray-600'
-    }
   }
 
   const getStatusIcon = (status: WorkflowStep['status']) => {
@@ -534,7 +409,7 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            {workflowSteps.map((step, index) => (
+            {workflowSteps.map((step) => (
               <div key={step.id} className="flex items-start space-x-4 p-4 border rounded-lg">
                 <div className="flex-shrink-0 mt-1">
                   {getStatusIcon(step.status)}
@@ -558,7 +433,7 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
                     <div className="flex items-center space-x-4">
                       {step.assigned_to && (
                         <span className="flex items-center gap-1">
-                          <User className="w-3 h-3" />
+                          <UserIcon className="w-3 h-3" />
                           {step.assigned_to}
                         </span>
                       )}
@@ -629,7 +504,7 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
             {/* Add Comment */}
             <div className="space-y-3">
               <div className="flex gap-3">
-                <Select value={commentType} onValueChange={(value: any) => setCommentType(value)}>
+                <Select value={commentType} onValueChange={(value: typeof commentType) => setCommentType(value)}>
                   <SelectTrigger className="w-40">
                     <SelectValue />
                   </SelectTrigger>
@@ -659,7 +534,7 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
                 <div key={comment.id} className="p-4 border rounded-lg">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
-                      <User className="w-4 h-4" />
+                      <UserIcon className="w-4 h-4" />
                       <span className="font-medium text-sm">{comment.user_id}</span>
                       <Badge variant="outline" className="text-xs">
                         {comment.comment_type}
@@ -669,7 +544,7 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
                       {new Date(comment.created_at).toLocaleString()}
                     </span>
                   </div>
-                  <p className="text-sm">{comment.comment}</p>
+                  <p className="text-sm">{comment.comment_text}</p>
                 </div>
               ))}
             </div>
@@ -680,7 +555,16 @@ export function WorkflowManager({ documentId, workspaceId }: WorkflowManagerProp
       {/* Document Viewer */}
       {showDocumentViewer && document && (
         <DocumentViewer
-          document={document}
+          document={{
+            ...document,
+            user_id: document.user_id || document.uploaded_by,
+            filename: document.filename || document.name,
+            file_type: document.file_type || 'unknown',
+            tags: [],
+            updated_at: document.created_at,
+            parsed_data: document.parsed_data || [],
+            ocr_text: document.ocr_text ?? ''
+          }}
           onClose={() => setShowDocumentViewer(false)}
         />
       )}
