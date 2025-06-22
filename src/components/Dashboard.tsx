@@ -1412,7 +1412,7 @@ export function Dashboard() {
 
         {activeTab === 'roles' && (
           <div className="space-y-6">
-            <RoleManagement currentUser={user} />
+            <RoleManagement currentUser={user || undefined} />
           </div>
         )}
       </main>

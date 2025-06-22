@@ -291,7 +291,7 @@ export function ExportOptions({ documents, parsedData, onClose }: ExportOptionsP
               ))}
               {parsedData.length > 50 && (
                 <div className="text-center text-sm text-muted-foreground py-2">
-                  Showing first 50 records. Use "Select All Records" to include all {parsedData.length} records.
+                  Showing first 50 records. Use &quot;Select All Records&quot; to include all {parsedData.length} records.
                 </div>
               )}
             </div>

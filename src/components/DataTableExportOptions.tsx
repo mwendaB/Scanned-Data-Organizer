@@ -147,7 +147,7 @@ export function DataTableExportOptions({
             ))}
             {data.length > 10 && (
               <div className="text-xs text-muted-foreground text-center py-1">
-                Showing first 10 records. Use "Select All" to include all {data.length} records.
+                Showing first 10 records. Use &quot;Select All&quot; to include all {data.length} records.
               </div>
             )}
           </div>
